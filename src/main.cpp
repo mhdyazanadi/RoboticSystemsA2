@@ -1,6 +1,6 @@
 
 #include <Arduino.h>
-//Testing Pushes
+//Honggang testing 
 //PINS
 // Define pins for sensors and buzzer
 #define EMIT_PIN 11
