@@ -1,6 +1,7 @@
 
 #include <Arduino.h>
 
+//PINS
 // Define pins for sensors and buzzer
 #define EMIT_PIN 11
 #define BUZZER_PIN A7
