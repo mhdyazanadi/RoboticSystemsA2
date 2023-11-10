@@ -2,12 +2,6 @@
 #ifndef _MOTORS_H
 #define _MOTORS_H
 
-
-
-
-
-
-
 #define FWD LOW  // Go forward
 #define REV HIGH  // Go backward
 class Motors_c {

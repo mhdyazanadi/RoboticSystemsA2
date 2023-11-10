@@ -11,11 +11,13 @@
 #include "kinematics.h"
 #include "pid.h"
 #include "encoders.h"
+#include "LCD_HD44780.h"
 
 // Declare instances of necessary classes
 LineSensor_c line_sensors;
 Motors_c motors(10, 16, 9, 15);  // Motor control with specified pins
 Kinematics_c kinematics;
+LCD_HD44780 lcd; // LCD class
 
 // Define constants for line sensing thresholds and motor control
 const int ACTIVE_THRESHOLD = 2150;
@@ -60,6 +62,9 @@ void setup() {
   line_sensors.initialize();  // Initialize line sensors
   motors.initialize();  // Initialize motors
   Serial.begin(9600);  // Start serial communication for debugging
+  Serial.println("Initializing LCD...");
+  lcd.init();
+  Serial.println("LCD Initialized.");
 }
 
 // Function to make a beep sound
@@ -177,118 +182,125 @@ void followLine() {
 
 // MAIN LOOP
 void loop() {
-
-  if (millis() - startup_time > 11000 && canTurn180) {
-    canTurn180 = false;
-  }
-
-  unsigned long current_time = micros();
-  float delta_t = (current_time - previous_time) / 1000000.0;
   
-  // Update Kinematics based on encoders readings
-  kinematics.update(count_Left, count_Right, delta_t);
-  //Serial.print("X Position: ");
-  //Serial.println(kinematics.getX());
-  //Serial.print("Y Position: ");
-  //Serial.println(kinematics.getY());
-  //Serial.print("Theta (radians): ");
-  //Serial.println(kinematics.getTheta());
-  //Serial.print("delta_t: ");
-  //Serial.println(delta_t);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Hello, World!");
+  Serial.println("Message should be displayed on LCD now.");
+  delay(2000);
 
-  //Serial.print("Encoder Value 0: ");
-  //Serial.println(count_Right);
-  //Serial.print("Encoder Value 1: ");
-  //Serial.println(count_Left);
+
+  // if (millis() - startup_time > 11000 && canTurn180) {
+  //   canTurn180 = false;
+  // }
+
+  // unsigned long current_time = micros();
+  // float delta_t = (current_time - previous_time) / 1000000.0;
   
-  // Get the turning direction based on DN1 and DN5 sensor readings
-  turn_dir = 0;
-  float readDN1 = line_sensors.readLineSensor(DN1);
-  float readDN5 = line_sensors.readLineSensor(DN5);
+  // // Update Kinematics based on encoders readings
+  // kinematics.update(count_Left, count_Right, delta_t);
+  // //Serial.print("X Position: ");
+  // //Serial.println(kinematics.getX());
+  // //Serial.print("Y Position: ");
+  // //Serial.println(kinematics.getY());
+  // //Serial.print("Theta (radians): ");
+  // //Serial.println(kinematics.getTheta());
+  // //Serial.print("delta_t: ");
+  // //Serial.println(delta_t);
 
-  if (readDN1 > 1200) turn_dir = -1;
-  if (readDN5 > 1200) turn_dir = 1;
+  // //Serial.print("Encoder Value 0: ");
+  // //Serial.println(count_Right);
+  // //Serial.print("Encoder Value 1: ");
+  // //Serial.println(count_Left);
+  
+  // // Get the turning direction based on DN1 and DN5 sensor readings
+  // turn_dir = 0;
+  // float readDN1 = line_sensors.readLineSensor(DN1);
+  // float readDN5 = line_sensors.readLineSensor(DN5);
 
-   // Turn until a line is detected or continue following the line
-  if (turn_dir != 0) {
-    turnUntilLine();
-  } else {
-    followLine();
-  }
+  // if (readDN1 > 1200) turn_dir = -1;
+  // if (readDN5 > 1200) turn_dir = 1;
 
-   // State machine logic to decide the robot's actions based on current state
-  switch (currentState) {
-    case STARTUP:
-      // For 2.5 seconds after startup, move forward slowly
-      if (millis() - startup_time < 2500) {
-        motors.setMotorPower(20, 23);
-      } else {
-        // Transition to finding the line with DN3
-        currentState = FINDING_LINE_WITH_DN3;
-        beep();
-      }
-      break;
+  //  // Turn until a line is detected or continue following the line
+  // if (turn_dir != 0) {
+  //   turnUntilLine();
+  // } else {
+  //   followLine();
+  // }
 
-    case FINDING_LINE_WITH_DN3:
-      if (line_sensors.readLineSensor(DN3) >= ACTIVE_THRESHOLD) {
-        motors.setMotorPower(20, 20);
-        if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD ||
-            line_sensors.readLineSensor(DN5) >= ACTIVE_THRESHOLD) {
-          currentState = ALIGNING_TO_LINE;
-          beep();
-        }
-      }
-      break;
+  //  // State machine logic to decide the robot's actions based on current state
+  // switch (currentState) {
+  //   case STARTUP:
+  //     // For 2.5 seconds after startup, move forward slowly
+  //     if (millis() - startup_time < 2500) {
+  //       motors.setMotorPower(20, 23);
+  //     } else {
+  //       // Transition to finding the line with DN3
+  //       currentState = FINDING_LINE_WITH_DN3;
+  //       beep();
+  //     }
+  //     break;
 
-    case ALIGNING_TO_LINE:
-      if (millis() - startup_time < 100) return;
-      motors.setMotorPower(0, 0);
-      if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD) {
-        turn_dir = -1;
-      } else {
-        turn_dir = 1;
-      }
-      turnUntilLine();
-      currentState = LINE_FOLLOWING;
-      beep();
-      break;
+  //   case FINDING_LINE_WITH_DN3:
+  //     if (line_sensors.readLineSensor(DN3) >= ACTIVE_THRESHOLD) {
+  //       motors.setMotorPower(20, 20);
+  //       if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD ||
+  //           line_sensors.readLineSensor(DN5) >= ACTIVE_THRESHOLD) {
+  //         currentState = ALIGNING_TO_LINE;
+  //         beep();
+  //       }
+  //     }
+  //     break;
 
-    case LINE_FOLLOWING:
-      followLine();
+  //   case ALIGNING_TO_LINE:
+  //     if (millis() - startup_time < 100) return;
+  //     motors.setMotorPower(0, 0);
+  //     if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD) {
+  //       turn_dir = -1;
+  //     } else {
+  //       turn_dir = 1;
+  //     }
+  //     turnUntilLine();
+  //     currentState = LINE_FOLLOWING;
+  //     beep();
+  //     break;
 
-      // Check if DN2, DN3, and DN4 do not sense a line for 500ms
-      if (line_sensors.readLineSensor(DN2) < INACTIVE2 &&
-          line_sensors.readLineSensor(DN3) < INACTIVE2 &&
-          line_sensors.readLineSensor(DN4) < INACTIVE2) {
+  //   case LINE_FOLLOWING:
+  //     followLine();
 
-        if (!gapTimerStarted) {
-          gapStartTime = millis();
-          gapTimerStarted = true;
-        }
+  //     // Check if DN2, DN3, and DN4 do not sense a line for 500ms
+  //     if (line_sensors.readLineSensor(DN2) < INACTIVE2 &&
+  //         line_sensors.readLineSensor(DN3) < INACTIVE2 &&
+  //         line_sensors.readLineSensor(DN4) < INACTIVE2) {
 
-        if (millis() - gapStartTime > 50) {
-          //motors.setMotorPower(0, 0);
-          currentState = GAP_CROSSING;
-          beep();
-        } else {
-          gapTimerStarted = false;
-        }
-      }
-      break;
-    case GAP_CROSSING:
-      motors.setMotorPower(20, 20);
-      if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD ||
-          line_sensors.readLineSensor(DN2) >= ACTIVE_THRESHOLD ||
-          line_sensors.readLineSensor(DN3) >= ACTIVE_THRESHOLD ||
-          line_sensors.readLineSensor(DN4) >= ACTIVE_THRESHOLD ||
-          line_sensors.readLineSensor(DN5) >= ACTIVE_THRESHOLD) {
+  //       if (!gapTimerStarted) {
+  //         gapStartTime = millis();
+  //         gapTimerStarted = true;
+  //       }
+
+  //       if (millis() - gapStartTime > 50) {
+  //         //motors.setMotorPower(0, 0);
+  //         currentState = GAP_CROSSING;
+  //         beep();
+  //       } else {
+  //         gapTimerStarted = false;
+  //       }
+  //     }
+  //     break;
+  //   case GAP_CROSSING:
+  //     motors.setMotorPower(20, 20);
+  //     if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD ||
+  //         line_sensors.readLineSensor(DN2) >= ACTIVE_THRESHOLD ||
+  //         line_sensors.readLineSensor(DN3) >= ACTIVE_THRESHOLD ||
+  //         line_sensors.readLineSensor(DN4) >= ACTIVE_THRESHOLD ||
+  //         line_sensors.readLineSensor(DN5) >= ACTIVE_THRESHOLD) {
         
-        currentState = LINE_FOLLOWING;
-        beep();
-      }
-      break;
-  }
-  // Save the current encoder readings for the next loop iteration
-  previous_count_Left = count_Left;
-  previous_count_Right = count_Right;
+  //       currentState = LINE_FOLLOWING;
+  //       beep();
+  //     }
+  //     break;
+  // }
+  // // Save the current encoder readings for the next loop iteration
+  // previous_count_Left = count_Left;
+  // previous_count_Right = count_Right;
 }

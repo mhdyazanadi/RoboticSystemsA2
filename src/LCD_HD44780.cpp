@@ -55,7 +55,54 @@ void LCD_HD44780::home() {
 }
 
 void LCD_HD44780::setCursor(uint8_t col, uint8_t row) {
-    int row_offsets[] = { 0x00, 0x40, 0x14 };
-    if (row > rows()) return;
-    command(col + row_offsets[row]);
+  int row_offsets[] = { 0x00, 0x40 };
+  command(LCD_SET_DDRAM_ADDR | (col + row_offsets[row]));
 }
+
+void LCD_HD44780::print(const String &message) {
+  for (int i = 0; i < message.length(); i++) {
+    write(message[i]);
+  }
+}
+
+void LCD_HD44780::command(uint8_t value) {
+  send(value, LOW);
+}
+
+void LCD_HD44780::write(uint8_t value) {
+  send(value, HIGH);
+}
+
+void LCD_HD44780::pulseEnable() {
+  digitalWrite(ENABLE_PIN, LOW);
+  delayMicroseconds(1);    
+  digitalWrite(ENABLE_PIN, HIGH);
+  delayMicroseconds(1);    // enable pulse must be >450ns
+  digitalWrite(ENABLE_PIN, LOW);
+  delayMicroseconds(100);   // commands need > 37us to settle
+}
+
+void LCD_HD44780::write4bits(uint8_t value) {
+  digitalWrite(D4_PIN, (value >> 0) & 0x01);
+  digitalWrite(D5_PIN, (value >> 1) & 0x01);
+  digitalWrite(D6_PIN, (value >> 2) & 0x01);
+  digitalWrite(D7_PIN, (value >> 3) & 0x01);
+
+  pulseEnable();
+}
+
+void LCD_HD44780::send(uint8_t value, uint8_t mode) {
+  digitalWrite(RS_PIN, mode);
+
+  // Write the upper 4 bits
+  write4bits(value >> 4);
+  // Write the lower 4 bits
+  write4bits(value);
+}
+
+// Now you can use this class in your main code to control the LCD.
+// For example:
+// LCD_HD44780 lcd;
+// lcd.init();
+// lcd.setCursor(0, 0);
+// lcd.print("Hello, World!");
