@@ -1,306 +1,448 @@
 
-#include <Arduino.h>
-
-// Define pins for sensors and buzzer
-#define EMIT_PIN 11
-#define BUZZER_PIN A7
-
-// Include necessary libraries for line sensing, motor control, kinematics, PID and encoders
-#include "linesensor.h"
+#include "kinematics.h"               //This main loop is the Turning PID!!!!
 #include "motors.h"
-#include "kinematics.h"
-#include "pid.h"
 #include "encoders.h"
-#include "LCD_HD44780.h"
+#include "speedPID.h"
+#include <EEPROM.h> //EEPROM LIBRARY
 
-// Declare instances of necessary classes
-LineSensor_c line_sensors;
-Motors_c motors(10, 16, 9, 15);  // Motor control with specified pins
-Kinematics_c kinematics;
-LCD_HD44780 lcd; // LCD class
+Kinematics_c M_kinematics;
+Motors_c M_motors;
+SpeedPID_c M_speedPID_Left; //left wheel speed PID
+SpeedPID_c M_speedPID_Right; // right wheel speed PID
 
-// Define constants for line sensing thresholds and motor control
-const int ACTIVE_THRESHOLD = 2150;
-const int INACTIVE2 = 1200;
-const int INACTIVE_THRESHOLD = 800;
-const int BiasPWM = 25;  // Base motor power for line following
-const int MaxTurnPWM = 26;  // Maximum turn power
+//==Kinematics varibles ======================
+float X_cor;
+float Y_cor;
+float Theta_cor;
+//==========================================
 
-// Declare global variables for timers and previous states
-unsigned long DN3InactiveStartTime = 0;
-unsigned long startup_time;
-unsigned long previous_time = 0;
-unsigned long gapStartTime;
-float previous_count_Left = 0;
-float previous_count_Right = 0;
 
-// Boolean flags for robot states
-bool onLine = false;
-bool DN3InactiveTimerStarted = false;
-bool canTurn180 = true;
-bool gapTimerStarted = false;
+//==SpeedPID varibles ========================
+float leftSpeedInput; //output from speed PID
+float rightSpeedInput;
 
-int turn_dir;  // Direction to turn: -1 for left, 1 for right
+float l_demand;       //output from Heading PID
+float r_demand;
+//==========================================
 
-// Define states for the robot's behavior
-enum RobotState {
-  STARTUP,
-  FINDING_LINE_WITH_DN3,
-  ALIGNING_TO_LINE,
-  LINE_FOLLOWING,
-  GAP_CROSSING
-};
 
-// Initial state of the robot
-RobotState currentState = STARTUP;
+//==TurnPID varibles==========================
+float demand_theta;       //demand_theta, the theta you input in the turn PID as demand, need to be updated dynamcally (angle segmentation)
+float current_theta;      //current_theta is the kinematic theta,
+
+float turnBias;
+
+#define PID_update_ts 20 // PID update time in millis()
+unsigned long PID_ts; //PID time stamp
+
+float K_P;
+float K_I;
+float K_D;
+
+float P_term;
+float I_term;
+float D_term;
+float totalOutput;
+
+float integral;
+float derivative;
+float error_last;
+//=========================================
+
+//==Other varibles ========================
+unsigned long taskDuration_ts;
+#define taskDuration 2000
+
+const int buzzerPin = 6;
+
+unsigned long loop_ts;
+unsigned long loop_ts_2;
+
+
+float SET_ANGLE = 0;
+//=========================================
+
+//=============================================EEPROM IMPLEMENTATION ============================================
+
+
+#define BUTTON_A_PIN  14  // Button A for Mode Selection
+#define BUTTON_B_PIN  30  // Button B for Reporting
+
+// Modes
+#define MODE_RUNNING_EXPERIMENT  0
+#define MODE_REPORTING_RESULTS   1
+
+int currentMode = MODE_RUNNING_EXPERIMENT;  // Default mode
+
+# define UPDATE_MS   1000
+unsigned long eep_update_ts;
+int eeprom_address;
+
+
+struct RobotData {
+  float current_theta;
+  float p_term;
+  float i_term;
+  float d_term;
+  int pwm_left;
+  int pwm_right;
+} robotData;
+
+
+void writeToEEPROM() {
+  int eeAddress = 0; // Start address to write
+  EEPROM.put(eeAddress, robotData);
+}
+
+void readFromEEPROM() {
+  int eeAddress = 0; // Start address to read
+  EEPROM.get(eeAddress, robotData);
+}
+
+void printRobotData() {
+  Serial.print("Current Theta: "); Serial.println(robotData.current_theta);
+  Serial.print("P Term: "); Serial.println(robotData.p_term);
+  Serial.print("I Term: "); Serial.println(robotData.i_term);
+  Serial.print("D Term: "); Serial.println(robotData.d_term);
+  Serial.print("PWM Left: "); Serial.println(robotData.pwm_left);
+  Serial.print("PWM Right: "); Serial.println(robotData.pwm_right);
+  Serial.println("----");
+}
+
+//=============================================EEPROM IMPLEMENTATION ============================================
+
+
 
 void setup() {
-  startup_time = millis();  // Record the start time for later use
-  pinMode(BUZZER_PIN, OUTPUT);  // Set buzzer pin as output
-  setupEncoder0();  // Initialize encoder 0
-  setupEncoder1();  // Initialize encoder 1
-  line_sensors.initialize();  // Initialize line sensors
-  motors.initialize();  // Initialize motors
-  Serial.begin(9600);  // Start serial communication for debugging
-  Serial.println("Initializing LCD...");
-  lcd.init();
-  Serial.println("LCD Initialized.");
-}
 
-// Function to make a beep sound
-void beep() {
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(100);
-  digitalWrite(BUZZER_PIN, LOW);
-}
-
-// Function to check if a line is detected
-int lineDetected() {
-  float left_sensor = line_sensors.readLineSensor(DN2);
-  float middle_sensor = line_sensors.readLineSensor(DN3);
-  float right_sensor = line_sensors.readLineSensor(DN4);
-
-  if (middle_sensor >= ACTIVE_THRESHOLD) {
-    return 1;
-  } else {
-    return -1;
-  }
-}
-
-// Function to turn the robot until it detects a line
-void turnUntilLine() {
-  float readDN1 = line_sensors.readLineSensor(DN1);
-  float readDN3 = line_sensors.readLineSensor(DN3);
-  float readDN5 = line_sensors.readLineSensor(DN5);
-  if (readDN3 > 1800) {
-    motors.setMotorPower(0, 0);  // Stop if middle sensor detects line
-  } else {
-    if (turn_dir < 0) {  // Turn left
-      motors.setMotorPower(-50, 45);
-    } else {  // Turn right
-      motors.setMotorPower(45, -45);
-    }
-  }
-}
-
-// Calculate a weighted measurement for line following
-float weightedMeasurement() {
-  float readDN2 = line_sensors.readLineSensor(DN2);
-  float readDN4 = line_sensors.readLineSensor(DN4);
-  float Sum = readDN2 + readDN4;  // Calculate sum of left and right sensors
-  float N2 = readDN2 / Sum;  // Normalize left sensor reading
-  float N4 = readDN4 / Sum;  // Normalize right sensor reading
-
-  N2 *= 2.0;
-  N4 *= 2.0;
-  return N2 - N4;
-}
-
-// Function to make robot turn 180 degrees
-void turn180Degree() {
-  if (!canTurn180) {
-    return;
-  }
-  motors.setMotorPower(0, 0);  // Stop motors
-  delay(300);
-  motors.setMotorPower(29, -29);  // Turn around
+  pinMode(BUTTON_A_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_B_PIN, INPUT_PULLUP);
+  Serial.begin(9600);
   delay(1000);
-  currentState = FINDING_LINE_WITH_DN3;
+  Serial.println(F("***RESET***"));
+
+
+  //=============================================
+
+  // Mode selection
+  Serial.println("A = Run Experiment, B = Report Results");
+  while (digitalRead(BUTTON_A_PIN) == HIGH && digitalRead(BUTTON_B_PIN) == HIGH) {
+    // Waiting for button press
+  }
+  if (digitalRead(BUTTON_A_PIN) == LOW) {
+    currentMode = MODE_RUNNING_EXPERIMENT;
+    Serial.println("Mode: Running Experiment");
+  } else if (digitalRead(BUTTON_B_PIN) == LOW) {
+    currentMode = MODE_REPORTING_RESULTS;
+    Serial.println("Mode: Reporting Results");
+  }
+
+
+  //===============================================
+
+  pinMode(buzzerPin, OUTPUT);
+
+  //Encoder IRS set up
+  setupEncoder0();
+  setupEncoder1();
+
+  //Initialising classes file
+  M_kinematics.initialise();
+  M_motors.initialise();
+  mainLevelInitialise();
+
+  //Initialising PID parameters (Changing P I D gains here)
+  M_speedPID_Left.initialise (count_e1, 50.0, 0.5, 100.0); // P = 50.0, I = 0.5, D = 100.0 works well in Assessment 1, but need to be re tuned for small angle rotation
+  M_speedPID_Right.initialise(count_e0, 50.0, 0.5, 100.0);
+
+  turnToAnglePID_initialise (0.08, 0.0003, 0.004); // turnPID P = 0.08, I = 0.0003, D = 0.004
+
+
+  scoreBeep();
+  delay(3000);
+  scoreBeep();
+  scoreBeep();  //Start operation
+
+  //testing================
+  //  loop_ts = millis();
+  //  loop_ts_2 = millis();
+  //  l_demand = 1.2;
+  //========================
+
+
+  //==================================================================================================================================
+  //==================================================================================================================================
+  //==ANGLE REQUESTED TO TURN MODIFIY HERE ===========================================================================================
+
+  SET_ANGLE = 0.0;
+
+  //==================================================================================================================================
+  //==================================================================================================================================
+  //==================================================================================================================================
+
+
+
+  taskDuration_ts = millis(); //record starting time
 }
 
-// This function implements the line-following logic.
-void followLine() {
-  // Read sensor values for DN1 to DN5
-  float readDN1 = line_sensors.readLineSensor(DN1);
-  float readDN2 = line_sensors.readLineSensor(DN2);
-  float readDN3 = line_sensors.readLineSensor(DN3);
-  float readDN4 = line_sensors.readLineSensor(DN4);
-  float readDN5 = line_sensors.readLineSensor(DN5);
 
-  // Check if the line is detected under the middle sensor
-  int detectedSensor = lineDetected();
 
-  // Update onLine variable based on sensor readings
-  if (detectedSensor != 1) {
-    onLine = true;
-  } else if (readDN2 >= ACTIVE_THRESHOLD || readDN4 >= ACTIVE_THRESHOLD) {
-    onLine = true;
-  } else {
-    onLine = false;
-  }
 
-  // If the line is detected under any sensor, calculate the motor powers
-  if (onLine) {
-    // Calculate motor powers based on line position
-    float W = weightedMeasurement();
-    float leftPWM = BiasPWM - (W * MaxTurnPWM);
-    float rightPWM = BiasPWM + (W * MaxTurnPWM);
 
-    motors.setMotorPower(leftPWM, rightPWM);
+void loop() {
 
-  } else {
-    // Stop motors if line is not detected
-    motors.setMotorPower(0, 0);
-  }
+  if (currentMode == MODE_RUNNING_EXPERIMENT) {
 
-  // Check for inactivity of the DN3 sensor and decide if a 180-degree turn is required
-  if (currentState != STARTUP) {
-    if (line_sensors.readLineSensor(DN3) < INACTIVE_THRESHOLD) {
-      if (!DN3InactiveTimerStarted) {
-        DN3InactiveStartTime = millis();
-        DN3InactiveTimerStarted = true;
+    M_kinematics.updateKinematics();    // keep Kinematics updating, the updating rate, pls see the class file
+
+    X_cor = M_kinematics.X_t_I;
+    Y_cor = M_kinematics.Y_t_I;
+    Theta_cor = M_kinematics.theta_t_I;    //update varible value to the main level.
+    current_theta =  Theta_cor;            // update kinematic theta for turnPID as current_theta
+
+    turnBias = turnToAnglePID (demand_theta, current_theta);
+    l_demand = 0 + turnBias;
+    r_demand = 0 - turnBias;
+
+    leftSpeedInput =  M_speedPID_Left.speedPID(l_demand);  //update speedPID
+    rightSpeedInput = M_speedPID_Right.speedPID(r_demand);
+
+    M_motors.setMotorPower (leftSpeedInput, rightSpeedInput); // PWMinput to the motor
+
+    //===================EEPROM UPDATING MEMORY====================================================
+    robotData.current_theta = current_theta;
+    robotData.p_term = P_term;
+    robotData.i_term = I_term;
+    robotData.d_term = D_term;
+    robotData.pwm_left = leftSpeedInput;
+    robotData.pwm_right = rightSpeedInput;
+
+    if (millis() - eep_update_ts > UPDATE_MS) {
+      eep_update_ts = millis();
+
+      // Write to EEPROM
+      writeToEEPROM();
+
+      // Increment eeprom_address with caution due to EEPROM size and write limits
+      eeprom_address += sizeof(RobotData);
+      if (eeprom_address > EEPROM.length() - sizeof(RobotData)) {
+        eeprom_address = 0; // Reset address or handle as needed
       }
-      if (millis() - DN3InactiveStartTime > 1000) {
-        DN3InactiveTimerStarted = false;
-        turn180Degree();
-      }
-    } else {
-      DN3InactiveTimerStarted = false;
+    }
+
+
+    printRobotData();
+
+    //========================================================================================
+
+
+  } else if (currentMode == MODE_REPORTING_RESULTS) {
+    for (int address = 0; address <= EEPROM.length() - sizeof(RobotData);
+         address += sizeof(RobotData)) {
+      EEPROM.get(address, robotData);
+      printRobotData();
+      delay(1000); // Delay for readability
     }
   }
+
+}
+// do dobule check the MaxSpeed allowed for the motor in the class file (MaxPWM input)
+// default is 50
+
+
+//  if ( (millis() - taskDuration_ts) > taskDuration ) {
+//    while (1) {
+//      //put data retriving function here
+//    }
+//  }
+
+
+// Testing the speedPID flip the demands sign every 2 sec
+
+//  unsigned long current_ts_2 = millis();
+//  unsigned long elapsed_t_2 = current_ts_2 - loop_ts_2;
+//  if (elapsed_t_2 > 5000) {
+//    loop_ts_2 = current_ts_2;
+//    l_demand = l_demand * -1.0;
+//  }
+
+
+//--Controller output printing------
+//  Serial.print(F("SETANGLE "));
+//  Serial.print(SET_ANGLE);
+//Serial.print(F(",ldem "));
+//Serial.print(l_demand);
+//  Serial.print(F(",rdem"));
+//  Serial.print(r_demand);
+
+//--kinematics result printing-----
+//  Serial.print(F(",X "));
+//  Serial.print(X_cor);
+//  Serial.print(F(",Y "));
+//  Serial.print(Y_cor);
+//  Serial.print(F(",T "));
+//  Serial.print(Theta_cor);
+
+//--Controller output printing------
+//  Serial.print(F(",tBs "));
+//  Serial.print(turnBias);
+//  Serial.print(F(",LP "));
+//  Serial.print(leftSpeedInput);
+//  Serial.print(F(",RP"));
+//  Serial.print(rightSpeedInput);
+
+//--turnPID internal parameter printing----
+//  Serial.print(F(",tP "));
+//  Serial.print(P_term);
+//  Serial.print(F(",tI "));
+//  Serial.print(I_term);
+//  Serial.print(F(",tD"));
+//  Serial.print(D_term);
+
+//--Left SpeedPID internal parameter printing----
+//  Serial.print(F(",LSP "));
+//  Serial.print( M_speedPID_Left.P_term);
+//  Serial.print(F(",LSI "));
+//  Serial.print( M_speedPID_Left.I_term);
+//  Serial.print(F(",LSD"));
+//  Serial.print( M_speedPID_Left.D_term);
+//Serial.print(F(",Lvelo"));
+//Serial.print( M_speedPID_Left.lpf);
+
+
+//--Right SpeedPID internal parameter printing----
+//  Serial.print(F(",RSP "));
+//  Serial.print( M_speedPID_Right.P_term);
+//  Serial.print(F(",RSI "));
+//  Serial.print( M_speedPID_Right.I_term);
+//  Serial.print(F(",RSD"));
+//  Serial.print( M_speedPID_Right.D_term);
+//  Serial.print(F(",Rvelo"));
+//  Serial.print( M_speedPID_Left.lpf);
+
+
+//Serial.print(F(","));
+//Serial.print();
+//Serial.print(F(","));
+//Serial.print();
+
+
+
+
+//Serial.print(F("\n"));
 }
 
-// MAIN LOOP
-void loop() {
-  
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Hello, World!");
-  Serial.println("Message should be displayed on LCD now.");
-  delay(2000);
 
 
-  // if (millis() - startup_time > 11000 && canTurn180) {
-  //   canTurn180 = false;
-  // }
 
-  // unsigned long current_time = micros();
-  // float delta_t = (current_time - previous_time) / 1000000.0;
-  
-  // // Update Kinematics based on encoders readings
-  // kinematics.update(count_Left, count_Right, delta_t);
-  // //Serial.print("X Position: ");
-  // //Serial.println(kinematics.getX());
-  // //Serial.print("Y Position: ");
-  // //Serial.println(kinematics.getY());
-  // //Serial.print("Theta (radians): ");
-  // //Serial.println(kinematics.getTheta());
-  // //Serial.print("delta_t: ");
-  // //Serial.println(delta_t);
 
-  // //Serial.print("Encoder Value 0: ");
-  // //Serial.println(count_Right);
-  // //Serial.print("Encoder Value 1: ");
-  // //Serial.println(count_Left);
-  
-  // // Get the turning direction based on DN1 and DN5 sensor readings
-  // turn_dir = 0;
-  // float readDN1 = line_sensors.readLineSensor(DN1);
-  // float readDN5 = line_sensors.readLineSensor(DN5);
 
-  // if (readDN1 > 1200) turn_dir = -1;
-  // if (readDN5 > 1200) turn_dir = 1;
 
-  //  // Turn until a line is detected or continue following the line
-  // if (turn_dir != 0) {
-  //   turnUntilLine();
-  // } else {
-  //   followLine();
-  // }
 
-  //  // State machine logic to decide the robot's actions based on current state
-  // switch (currentState) {
-  //   case STARTUP:
-  //     // For 2.5 seconds after startup, move forward slowly
-  //     if (millis() - startup_time < 2500) {
-  //       motors.setMotorPower(20, 23);
-  //     } else {
-  //       // Transition to finding the line with DN3
-  //       currentState = FINDING_LINE_WITH_DN3;
-  //       beep();
-  //     }
-  //     break;
+float turnToAnglePID (float demand_turn, float measurement_turn) {
+  unsigned long current_ts = millis();
+  unsigned long elapsed_t = current_ts - PID_ts;
 
-  //   case FINDING_LINE_WITH_DN3:
-  //     if (line_sensors.readLineSensor(DN3) >= ACTIVE_THRESHOLD) {
-  //       motors.setMotorPower(20, 20);
-  //       if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD ||
-  //           line_sensors.readLineSensor(DN5) >= ACTIVE_THRESHOLD) {
-  //         currentState = ALIGNING_TO_LINE;
-  //         beep();
-  //       }
-  //     }
-  //     break;
+  if (elapsed_t == 0) return totalOutput; //prevent d_t is zero
 
-  //   case ALIGNING_TO_LINE:
-  //     if (millis() - startup_time < 100) return;
-  //     motors.setMotorPower(0, 0);
-  //     if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD) {
-  //       turn_dir = -1;
-  //     } else {
-  //       turn_dir = 1;
-  //     }
-  //     turnUntilLine();
-  //     currentState = LINE_FOLLOWING;
-  //     beep();
-  //     break;
+  if (elapsed_t > PID_update_ts) {
+    PID_ts = current_ts;  //update PID timestamp
 
-  //   case LINE_FOLLOWING:
-  //     followLine();
+    float error_sig = demand_turn - measurement_turn;
 
-  //     // Check if DN2, DN3, and DN4 do not sense a line for 500ms
-  //     if (line_sensors.readLineSensor(DN2) < INACTIVE2 &&
-  //         line_sensors.readLineSensor(DN3) < INACTIVE2 &&
-  //         line_sensors.readLineSensor(DN4) < INACTIVE2) {
+    P_term = K_P * error_sig;
 
-  //       if (!gapTimerStarted) {
-  //         gapStartTime = millis();
-  //         gapTimerStarted = true;
-  //       }
+    integral = integral + error_sig * float(elapsed_t); //typecasting the d_t
+    I_term = K_I * integral;
 
-  //       if (millis() - gapStartTime > 50) {
-  //         //motors.setMotorPower(0, 0);
-  //         currentState = GAP_CROSSING;
-  //         beep();
-  //       } else {
-  //         gapTimerStarted = false;
-  //       }
-  //     }
-  //     break;
-  //   case GAP_CROSSING:
-  //     motors.setMotorPower(20, 20);
-  //     if (line_sensors.readLineSensor(DN1) >= ACTIVE_THRESHOLD ||
-  //         line_sensors.readLineSensor(DN2) >= ACTIVE_THRESHOLD ||
-  //         line_sensors.readLineSensor(DN3) >= ACTIVE_THRESHOLD ||
-  //         line_sensors.readLineSensor(DN4) >= ACTIVE_THRESHOLD ||
-  //         line_sensors.readLineSensor(DN5) >= ACTIVE_THRESHOLD) {
-        
-  //       currentState = LINE_FOLLOWING;
-  //       beep();
-  //     }
-  //     break;
-  // }
-  // // Save the current encoder readings for the next loop iteration
-  // previous_count_Left = count_Left;
-  // previous_count_Right = count_Right;
+    derivative = (error_sig - error_last) / float(elapsed_t); //typecasting the d_t
+    D_term = K_D * derivative;
+    error_last = error_sig; //update the error signal
+
+    totalOutput = P_term + I_term - D_term;
+  }
+  return totalOutput;
 }
+
+
+
+
+
+
+
+void turnToAnglePID_initialise(float in_P, float in_I, float in_D) {
+  PID_ts = millis();
+
+  K_P = in_P;
+  K_I = in_I;
+  K_D = in_D;
+
+  P_term = 0.0;
+  I_term = 0.0;
+  D_term = 0.0;
+  totalOutput = 0.0;
+
+  integral = 0.0;
+  derivative = 0.0;
+  error_last = 0.0;
+}
+
+
+void mainLevelInitialise() {
+
+  //Kinematics varibles ======================
+  X_cor = 0.0;
+  Y_cor = 0.0;
+  Theta_cor = 0.0;
+  //==========================================
+
+  //SpeedPID varibles ========================
+  leftSpeedInput = 0.0; //output from speed PID
+  rightSpeedInput = 0.0;
+  l_demand = 0.0; //output from Heading PID
+  r_demand = 0.0;
+  //==========================================
+
+  //TurnPID varibles==========================
+  demand_theta = 0.0;
+  current_theta = 0.0;         //current_theta is the kinematic theta,
+  turnBias = 0.0;
+  PID_ts = 0; //PID time stamp
+  //===========================================
+
+
+  //Other varibles ============================
+
+  //===========================================
+}
+
+
+
+
+
+
+void scoreBeep() {
+  // First spike
+  tone(buzzerPin, 1500, 50);  // tone(pin, frequency, duration)
+  delay(100);
+
+  // Second spike
+  tone(buzzerPin, 2000, 50);
+  delay(100);
+}
+
+
+
+//====================== EEPROM METHOD ===================
+
+//====================== EEPROM METHOD ===================
+
+
+
+
+
+
+
+
+
+
