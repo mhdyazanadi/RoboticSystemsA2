@@ -63,6 +63,50 @@ float SET_ANGLE = 0;
 
 //=============================EEPROM CODE=======================================
 
+// Advanced Version Still to be implemnted.
+
+// struct RobotData {
+//   float current_theta;
+//   float demand_theta;
+//   float leftSpeedInput;
+//   float rightSpeedInput;
+//   float P_term;
+//   float I_term;
+//   float D_term;
+// };
+
+// void writeToEEPROM() {
+//   RobotData data = {current_theta, demand_theta, leftSpeedInput, rightSpeedInput, P_term, I_term, D_term};
+//   EEPROM.put(eeprom_address, data);
+//   eeprom_address += sizeof(RobotData);
+//   if (eeprom_address > EEPROM.length() - sizeof(RobotData)) {
+//     eeprom_address = 0; // Reset address to avoid overflow
+//   }
+// }
+
+// void readAllDataFromEEPROM() {
+//   for (int address = 0; address <= EEPROM.length() - sizeof(RobotData); address += sizeof(RobotData)) {
+//     RobotData data;
+//     EEPROM.get(address, data);
+//     printRobotData(data);
+//     delay(1000); // Delay for readability
+//   }
+// }
+
+// void printRobotData(const RobotData & data) {
+//   Serial.print("Current Theta: "); Serial.println(data.current_theta);
+//   Serial.print("Demand Theta: "); Serial.println(data.demand_theta);
+//   Serial.print("Left Speed Input: "); Serial.println(data.leftSpeedInput);
+//   Serial.print("Right Speed Input: "); Serial.println(data.rightSpeedInput);
+//   Serial.print("P Term: "); Serial.println(data.P_term);
+//   Serial.print("I Term: "); Serial.println(data.I_term);
+//   Serial.print("D Term: "); Serial.println(data.D_term);
+// }
+
+
+
+
+
 /*
  * This code segment manages EEPROM operations. 
  * An specific EEPROM address for each variable has been defined to  
@@ -74,6 +118,7 @@ float SET_ANGLE = 0;
  * the robot's current state, including PID control parameters and kinematic data.
  * 
  */
+
 #define BUTTON_A_PIN  14        //button A pin number
 #define UPDATE_MS   1000        // Update period in milliseconds = 1sec
 unsigned long eep_update_ts;    // Timestamp for the last EEPROM update
@@ -185,10 +230,11 @@ void setup() {
   // Read data from EEPROM to initialise variables from EERPOM
   readFromEEPROM();
   printRobotData();
+
+  // Read data from EEPROM to initialise variables from EERPOM
+  //readAllDataFromEEPROM(); // Part of advanced version
   
 }
-
-
 
 
 
